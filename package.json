@@ -1,0 +1,17 @@
+{
+	"name": "twitch-rt-chat-logger",
+	"module": "index.js",
+	"type": "module",
+	"devDependencies": {
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5.0.0"
+	},
+	"dependencies": {
+		"dotenv": "^16.5.0",
+		"open": "^11.0.0",
+		"tmi.js": "^1.8.5",
+		"ws": "^8.18.2"
+	}
+}
