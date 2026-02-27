@@ -25,7 +25,7 @@ This tool monitors a Twitch channel's status via EventSub WebSockets, collects c
 ## Installation
 
 ```bash
-git clone https://github.com/youruser/twitch-rt-chat-logger.git
+git clone https://github.com/hqk0/twitch-rt-chat-logger.git
 cd twitch-rt-chat-logger
 bun install
 ```

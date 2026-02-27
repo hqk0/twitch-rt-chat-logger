@@ -25,7 +25,7 @@ Twitch EventSub WebSocket を介して配信の開始・終了を自動検知し
 ## インストール
 
 ```bash
-git clone https://github.com/youruser/twitch-rt-chat-logger.git
+git clone https://github.com/hqk0/twitch-rt-chat-logger.git
 cd twitch-rt-chat-logger
 bun install
 ```
