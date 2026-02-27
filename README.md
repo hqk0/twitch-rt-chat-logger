@@ -2,7 +2,7 @@
 
 A real-time Twitch chat logging and archival coordination tool built with [Bun](https://bun.sh/).
 
-This tool monitors a Twitch channel's status via EventSub WebSockets, collects chat messages in real-time, and automatically handles post-stream tasks like uploading data to Cloudflare R2 and registering records in Cloudflare D1 for integration with [Twitch Archive Manager (tam)](https://github.com/youruser/twitch-archive-manager).
+This tool monitors a Twitch channel's status via EventSub WebSockets, collects chat messages in real-time, and automatically handles post-stream tasks like uploading data to Cloudflare R2 and registering records in Cloudflare D1 for integration with [Twitch Archive Manager (tam)](https://github.com/hqk0/twitch-archive-manager).
 
 ## Key Features
 

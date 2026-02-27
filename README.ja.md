@@ -2,7 +2,7 @@
 
 [Bun](https://bun.sh/) で構築された、Twitch チャットのリアルタイム保存およびアーカイブ自動化支援ツールです。
 
-Twitch EventSub WebSocket を介して配信の開始・終了を自動検知し、チャットをリアルタイムで収集します。配信終了後には、チャットデータを Cloudflare R2 へアップロードし、Cloudflare D1 データベースへ記録を作成することで、[Twitch Archive Manager (tam)](https://github.com/youruser/twitch-archive-manager) による全自動アーカイブ処理のトリガーとなります。
+Twitch EventSub WebSocket を介して配信の開始・終了を自動検知し、チャットをリアルタイムで収集します。配信終了後には、チャットデータを Cloudflare R2 へアップロードし、Cloudflare D1 データベースへ記録を作成することで、[Twitch Archive Manager (tam)](https://github.com/hqk0/twitch-archive-manager) による全自動アーカイブ処理のトリガーとなります。
 
 ## 主な機能
 
