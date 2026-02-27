@@ -9,9 +9,13 @@
 		"typescript": "^5.0.0"
 	},
 	"dependencies": {
+		"@aws-sdk/client-s3": "^3.997.0",
 		"dotenv": "^16.5.0",
 		"open": "^11.0.0",
 		"tmi.js": "^1.8.5",
 		"ws": "^8.18.2"
+	},
+	"scripts": {
+		"start": "bun run src/index.js"
 	}
 }
