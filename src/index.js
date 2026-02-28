@@ -176,27 +176,27 @@ class TwitchBot {
 		console.log("Starting post-stream archive process...");
 		await new Promise(r => setTimeout(r, 30000));
 
-		const vodId = await this.getLatestVodId();
-		if (!vodId) {
+		const vodInfo = await this.getLatestVodInfo();
+		if (!vodInfo) {
 			console.error("Could not find VOD ID. Skipping R2/D1.");
 			return;
 		}
-		console.log(`Target VOD ID: ${vodId}`);
+		console.log(`Target VOD ID: ${vodInfo.id}, Duration: ${vodInfo.duration}`);
 
 		if (this.lastJsonPath) {
-			await this.uploadToR2(vodId, this.lastJsonPath);
+			await this.uploadToR2(vodInfo.id, this.lastJsonPath);
 		}
 
-		await this.registerToD1(vodId);
+		await this.registerToD1(vodInfo.id, vodInfo.duration);
 		
 		await sendNotification({
 			title: "Archive Ready",
-			message: `Stream archived: ${this.currentTitle} (VOD: ${vodId})`,
+			message: `Stream archived: ${this.currentTitle} (VOD: ${vodInfo.id})`,
 			priority: "default"
 		});
 	}
 
-	async getLatestVodId() {
+	async getLatestVodInfo() {
 		try {
 			const token = await getValidAccessToken();
 			const clientId = getClientId();
@@ -204,7 +204,16 @@ class TwitchBot {
 				headers: { "Client-ID": clientId, Authorization: `Bearer ${token}` },
 			});
 			const data = await response.json();
-			return data.data?.[0]?.id || null;
+			const vod = data.data?.[0];
+			if (!vod) return null;
+
+			// Format duration: "3h8m33s" -> "3時間8分33秒"
+			let duration = vod.duration
+				.replace("h", "時間")
+				.replace("m", "分")
+				.replace("s", "秒");
+
+			return { id: vod.id, duration: duration };
 		} catch (e) {
 			console.error("Fetch VOD error:", e);
 			return null;
@@ -237,7 +246,7 @@ class TwitchBot {
 		}
 	}
 
-	async registerToD1(vodId) {
+	async registerToD1(vodId, duration) {
 		console.log(`Registering VOD ${vodId} to D1...`);
 		const endpoint = `https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/d1/database/${process.env.D1_DATABASE_ID}/query`;
 		const headers = {
@@ -263,13 +272,13 @@ class TwitchBot {
 
 			if (exists) {
 				// UPDATE
-				sql = "UPDATE videos SET title = ?, category = ?, created_at = ?, status_raw = ? WHERE id = ?";
-				params = [this.currentTitle, this.currentGame, this.lastStartTime, 0, parseInt(vodId)];
+				sql = "UPDATE videos SET title = ?, category = ?, duration = ?, created_at = ?, status_raw = ? WHERE id = ?";
+				params = [this.currentTitle, this.currentGame, duration, this.lastStartTime, 0, parseInt(vodId)];
 				console.log("Record exists. Updating...");
 			} else {
 				// INSERT
-				sql = "INSERT INTO videos (id, title, category, created_at, status_raw, status_burned) VALUES (?, ?, ?, ?, ?, ?)";
-				params = [parseInt(vodId), this.currentTitle, this.currentGame, this.lastStartTime, 0, 0];
+				sql = "INSERT INTO videos (id, title, category, duration, created_at, status_raw, status_burned) VALUES (?, ?, ?, ?, ?, ?, ?)";
+				params = [parseInt(vodId), this.currentTitle, this.currentGame, duration, this.lastStartTime, 0, 0];
 				console.log("New record. Inserting...");
 			}
 

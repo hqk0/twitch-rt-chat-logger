@@ -74,12 +74,14 @@ class ChatLogger {
 			const vpos = Math.floor(vposRaw / 10) - 600;
 
 			this.chatCounter++;
-			this.jsonEntries.push({
+			const entry = {
 				vpos: vpos,
-				timestamp: Math.floor(vposRaw / 1000),
+				timestamp: Math.round(vpos / 100),
 				author: tags["display-name"] || tags.username,
 				message: cleanMessage,
-			});
+			};
+
+			this.jsonEntries.push(entry);
 
 			if (this.chatCounter % 10 === 0) {
 				await this.saveToFile();
