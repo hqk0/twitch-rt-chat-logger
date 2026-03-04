@@ -28,6 +28,7 @@ class TwitchBot {
 		this.sessionId = null;
 		this.chatLogger = null;
 		this.lastStartTime = null;
+		this.lastStreamId = null;
 		this.lastJsonPath = null;
 
 		// State
@@ -52,7 +53,9 @@ class TwitchBot {
 		this.ws.on("open", () => console.log("WebSocket connected"));
 		this.ws.on("message", (data) => this.onMessage(data));
 		this.ws.on("close", (code, reason) => {
-			console.log(`WebSocket closed: ${code} - ${reason}. Reconnecting in 5s...`);
+			console.log(
+				`WebSocket closed: ${code} - ${reason}. Reconnecting in 5s...`,
+			);
 			setTimeout(() => this.connect(), 5000);
 		});
 		this.ws.on("error", (err) => console.error("WebSocket error:", err));
@@ -74,7 +77,9 @@ class TwitchBot {
 					this.connect(message.payload.session.reconnect_url);
 					break;
 				case "revocation":
-					console.warn(`Subscription revoked: ${message.payload.subscription.type}`);
+					console.warn(
+						`Subscription revoked: ${message.payload.subscription.type}`,
+					);
 					break;
 			}
 		} catch (e) {
@@ -95,7 +100,8 @@ class TwitchBot {
 			case "stream.online":
 				console.log(`Stream Online: ${event.broadcaster_user_name}`);
 				this.lastStartTime = event.started_at || new Date().toISOString();
-				
+				this.lastStreamId = event.id;
+
 				await sendNotification({
 					title: "Stream Started!",
 					message: `${event.broadcaster_user_name} is now live!\n${this.currentTitle}\n${this.currentGame}`,
@@ -121,7 +127,7 @@ class TwitchBot {
 				console.log(`Channel Update: ${event.title} [${event.category_name}]`);
 				const oldTitle = this.currentTitle;
 				const oldGame = this.currentGame;
-				
+
 				this.currentTitle = event.title;
 				this.currentGame = event.category_name;
 
@@ -141,9 +147,9 @@ class TwitchBot {
 	startChatLogger(startTime) {
 		if (this.chatLogger) return;
 		console.log(`Starting chat logger process for ${startTime}`);
-		
+
 		this.chatLogger = spawn("bun", [join(__dirname, "chat.js"), startTime]);
-		
+
 		this.chatLogger.stdout.on("data", (data) => {
 			const line = data.toString().trim();
 			if (line.includes("JSON_SAVED: ")) {
@@ -174,7 +180,7 @@ class TwitchBot {
 
 	async handlePostStreamArchive() {
 		console.log("Starting post-stream archive process...");
-		await new Promise(r => setTimeout(r, 30000));
+		await new Promise((r) => setTimeout(r, 30000));
 
 		const vodInfo = await this.getLatestVodInfo();
 		if (!vodInfo) {
@@ -188,11 +194,11 @@ class TwitchBot {
 		}
 
 		await this.registerToD1(vodInfo.id, vodInfo.duration);
-		
+
 		await sendNotification({
 			title: "Archive Ready",
 			message: `Stream archived: ${this.currentTitle} (VOD: ${vodInfo.id})`,
-			priority: "default"
+			priority: "default",
 		});
 	}
 
@@ -200,20 +206,41 @@ class TwitchBot {
 		try {
 			const token = await getValidAccessToken();
 			const clientId = getClientId();
-			const response = await fetch(`https://api.twitch.tv/helix/videos?user_id=${CHANNEL_ID}&type=archive&first=1`, {
-				headers: { "Client-ID": clientId, Authorization: `Bearer ${token}` },
-			});
-			const data = await response.json();
-			const vod = data.data?.[0];
-			if (!vod) return null;
 
-			// Format duration: "3h8m33s" -> "3時間8分33秒"
-			let duration = vod.duration
-				.replace("h", "時間")
-				.replace("m", "分")
-				.replace("s", "秒");
+			// Poll up to 5 times (every 30 seconds)
+			for (let i = 0; i < 5; i++) {
+				const response = await fetch(
+					`https://api.twitch.tv/helix/videos?user_id=${CHANNEL_ID}&type=archive&first=5`,
+					{
+						headers: {
+							"Client-ID": clientId,
+							Authorization: `Bearer ${token}`,
+						},
+					},
+				);
+				const data = await response.json();
 
-			return { id: vod.id, duration: duration };
+				let vod = null;
+				if (this.lastStreamId) {
+					vod = data.data?.find((v) => v.stream_id === this.lastStreamId);
+				} else {
+					vod = data.data?.[0];
+				}
+
+				if (vod) {
+					// Format duration: "3h8m33s" -> "3時間8分33秒"
+					let duration = vod.duration
+						.replace("h", "時間")
+						.replace("m", "分")
+						.replace("s", "秒");
+
+					return { id: vod.id, duration: duration };
+				}
+
+				console.log("Matching VOD not found yet. Retrying in 30 seconds...");
+				await new Promise((r) => setTimeout(r, 30000));
+			}
+			return null;
 		} catch (e) {
 			console.error("Fetch VOD error:", e);
 			return null;
@@ -234,12 +261,14 @@ class TwitchBot {
 		try {
 			const file = Bun.file(filePath);
 			const body = await file.text();
-			await s3.send(new PutObjectCommand({
-				Bucket: process.env.R2_BUCKET_NAME,
-				Key: `${vodId}.json`,
-				Body: body,
-				ContentType: "application/json",
-			}));
+			await s3.send(
+				new PutObjectCommand({
+					Bucket: process.env.R2_BUCKET_NAME,
+					Key: `${vodId}.json`,
+					Body: body,
+					ContentType: "application/json",
+				}),
+			);
 			console.log("Uploaded to R2 successfully.");
 		} catch (e) {
 			console.error("R2 Upload error:", e);
@@ -272,13 +301,30 @@ class TwitchBot {
 
 			if (exists) {
 				// UPDATE
-				sql = "UPDATE videos SET title = ?, category = ?, duration = ?, created_at = ?, status_raw = ? WHERE id = ?";
-				params = [this.currentTitle, this.currentGame, duration, this.lastStartTime, 0, parseInt(vodId)];
+				sql =
+					"UPDATE videos SET title = ?, category = ?, duration = ?, created_at = ?, status_raw = ? WHERE id = ?";
+				params = [
+					this.currentTitle,
+					this.currentGame,
+					duration,
+					this.lastStartTime,
+					0,
+					parseInt(vodId),
+				];
 				console.log("Record exists. Updating...");
 			} else {
 				// INSERT
-				sql = "INSERT INTO videos (id, title, category, duration, created_at, status_raw, status_burned) VALUES (?, ?, ?, ?, ?, ?, ?)";
-				params = [parseInt(vodId), this.currentTitle, this.currentGame, duration, this.lastStartTime, 0, 0];
+				sql =
+					"INSERT INTO videos (id, title, category, duration, created_at, status_raw, status_burned) VALUES (?, ?, ?, ?, ?, ?, ?)";
+				params = [
+					parseInt(vodId),
+					this.currentTitle,
+					this.currentGame,
+					duration,
+					this.lastStartTime,
+					0,
+					0,
+				];
 				console.log("New record. Inserting...");
 			}
 
@@ -309,20 +355,29 @@ class TwitchBot {
 			try {
 				const response = await fetch(EVENTSUB_URL, {
 					method: "POST",
-					headers: { "Client-ID": clientId, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+					headers: {
+						"Client-ID": clientId,
+						Authorization: `Bearer ${token}`,
+						"Content-Type": "application/json",
+					},
 					body: JSON.stringify({
-						type: type, version: "1",
+						type: type,
+						version: "1",
 						condition: { broadcaster_user_id: CHANNEL_ID },
 						transport: { method: "websocket", session_id: this.sessionId },
 					}),
 				});
 				if (!response.ok) {
 					const text = await response.text();
-					console.error(`Failed to subscribe to ${type}: ${response.status} - ${text}`);
+					console.error(
+						`Failed to subscribe to ${type}: ${response.status} - ${text}`,
+					);
 				} else {
 					console.log(`Successfully subscribed to ${type}`);
 				}
-			} catch (e) { console.error(`Error subscribing to ${type}:`, e); }
+			} catch (e) {
+				console.error(`Error subscribing to ${type}:`, e);
+			}
 		}
 	}
 
@@ -335,7 +390,9 @@ class TwitchBot {
 			const file = Bun.file(LOG_FILE);
 			const content = (await file.exists()) ? await file.text() : "";
 			await Bun.write(file, content + logEntry);
-		} catch (error) { console.error("Failed to write to log file:", error); }
+		} catch (error) {
+			console.error("Failed to write to log file:", error);
+		}
 	}
 }
 
