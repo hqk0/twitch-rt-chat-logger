@@ -42,16 +42,25 @@ class TwitchBot {
 	}
 
 	async connect(url = WEBSOCKET_URL) {
+		let oldWs = null;
 		if (this.ws) {
-			this.ws.removeAllListeners();
-			this.ws.close();
+			if (url === WEBSOCKET_URL) {
+				this.ws.removeAllListeners();
+				this.ws.close();
+			} else {
+				oldWs = this.ws;
+				oldWs.removeAllListeners("close");
+				oldWs.on("close", (code, reason) => {
+					console.log(`Old WebSocket closed: ${code} - ${reason}`);
+				});
+			}
 		}
 
 		console.log(`Connecting to WebSocket: ${url}`);
 		this.ws = new WebSocket(url);
 
 		this.ws.on("open", () => console.log("WebSocket connected"));
-		this.ws.on("message", (data) => this.onMessage(data));
+		this.ws.on("message", (data) => this.onMessage(data, oldWs));
 		this.ws.on("close", (code, reason) => {
 			console.log(
 				`WebSocket closed: ${code} - ${reason}. Reconnecting in 5s...`,
@@ -61,14 +70,22 @@ class TwitchBot {
 		this.ws.on("error", (err) => console.error("WebSocket error:", err));
 	}
 
-	async onMessage(data) {
+	async onMessage(data, oldWs = null) {
 		try {
 			const message = JSON.parse(data.toString());
 			switch (message.metadata.message_type) {
 				case "session_welcome":
+					const isReconnect = !!oldWs;
 					this.sessionId = message.payload.session.id;
 					console.log(`Session established: ${this.sessionId}`);
-					await this.subscribeToEvents();
+
+					if (isReconnect) {
+						oldWs.removeAllListeners();
+						oldWs.close();
+						console.log("Closed old WebSocket connection after reconnect.");
+					} else {
+						await this.subscribeToEvents();
+					}
 					break;
 				case "notification":
 					await this.handleNotification(message.payload);
