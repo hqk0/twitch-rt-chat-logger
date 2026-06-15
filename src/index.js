@@ -34,6 +34,10 @@ class TwitchBot {
 		// State
 		this.currentTitle = "Unknown";
 		this.currentGame = "Unknown";
+
+		// Keepalive tracking
+		this.keepaliveTimer = null;
+		this.keepaliveTimeoutSeconds = 10; // Default fallback from Twitch documentation
 	}
 
 	async start() {
@@ -43,6 +47,11 @@ class TwitchBot {
 
 	async connect(url = WEBSOCKET_URL) {
 		let oldWs = null;
+		if (this.keepaliveTimer) {
+			clearTimeout(this.keepaliveTimer);
+			this.keepaliveTimer = null;
+		}
+
 		if (this.ws) {
 			if (url === WEBSOCKET_URL) {
 				this.ws.removeAllListeners();
@@ -65,19 +74,35 @@ class TwitchBot {
 			console.log(
 				`WebSocket closed: ${code} - ${reason}. Reconnecting in 5s...`,
 			);
+			if (this.keepaliveTimer) {
+				clearTimeout(this.keepaliveTimer);
+				this.keepaliveTimer = null;
+			}
 			setTimeout(() => this.connect(), 5000);
 		});
-		this.ws.on("error", (err) => console.error("WebSocket error:", err));
+		this.ws.on("error", (err) => {
+			console.error("WebSocket error:", err);
+			// Terminate connection on error to trigger reconnection
+			if (this.ws) {
+				this.ws.terminate();
+			}
+		});
 	}
 
 	async onMessage(data, oldWs = null) {
+		// Reset keepalive timer on any message from server
+		this.resetKeepaliveTimeout();
+
 		try {
 			const message = JSON.parse(data.toString());
 			switch (message.metadata.message_type) {
 				case "session_welcome":
 					const isReconnect = !!oldWs;
 					this.sessionId = message.payload.session.id;
-					console.log(`Session established: ${this.sessionId}`);
+					if (message.payload.session.keepalive_timeout_seconds) {
+						this.keepaliveTimeoutSeconds = message.payload.session.keepalive_timeout_seconds;
+					}
+					console.log(`Session established: ${this.sessionId} (timeout: ${this.keepaliveTimeoutSeconds}s)`);
 
 					if (isReconnect) {
 						oldWs.removeAllListeners();
@@ -86,11 +111,14 @@ class TwitchBot {
 					} else {
 						await this.subscribeToEvents();
 					}
+					// Apply updated timeout immediately
+					this.resetKeepaliveTimeout();
 					break;
 				case "notification":
 					await this.handleNotification(message.payload);
 					break;
 				case "session_reconnect":
+					console.log("Twitch requested reconnect. Reconnecting to new URL...");
 					this.connect(message.payload.session.reconnect_url);
 					break;
 				case "revocation":
@@ -98,10 +126,27 @@ class TwitchBot {
 						`Subscription revoked: ${message.payload.subscription.type}`,
 					);
 					break;
+				case "session_keepalive":
+					// No-op. Just logging at debug level is enough, timer reset is handled above.
+					break;
 			}
 		} catch (e) {
 			console.error("Error processing message:", e);
 		}
+	}
+
+	resetKeepaliveTimeout() {
+		if (this.keepaliveTimer) {
+			clearTimeout(this.keepaliveTimer);
+		}
+		// Twitch recommends adding a buffer (e.g. 3 seconds) to the keepalive timeout
+		const timeoutMs = (this.keepaliveTimeoutSeconds + 3) * 1000;
+		this.keepaliveTimer = setTimeout(() => {
+			console.warn(`Keepalive timeout reached. No message received for ${this.keepaliveTimeoutSeconds + 3} seconds. Reconnecting...`);
+			if (this.ws) {
+				this.ws.terminate();
+			}
+		}, timeoutMs);
 	}
 
 	async handleNotification(payload) {
@@ -366,6 +411,7 @@ class TwitchBot {
 		const types = ["stream.online", "stream.offline", "channel.update"];
 		const token = await getValidAccessToken();
 		const clientId = getClientId();
+		let allSucceeded = true;
 
 		for (const type of types) {
 			console.log(`Subscribing to ${type}...`);
@@ -389,12 +435,23 @@ class TwitchBot {
 					console.error(
 						`Failed to subscribe to ${type}: ${response.status} - ${text}`,
 					);
+					allSucceeded = false;
 				} else {
 					console.log(`Successfully subscribed to ${type}`);
 				}
 			} catch (e) {
 				console.error(`Error subscribing to ${type}:`, e);
+				allSucceeded = false;
 			}
+		}
+
+		if (!allSucceeded) {
+			console.warn("One or more subscriptions failed. Force-reconnecting WebSocket in 10s to retry...");
+			setTimeout(() => {
+				if (this.ws) {
+					this.ws.terminate();
+				}
+			}, 10000);
 		}
 	}
 
