@@ -38,6 +38,8 @@ class TwitchBot {
 		// Keepalive tracking
 		this.keepaliveTimer = null;
 		this.keepaliveTimeoutSeconds = 10; // Default fallback from Twitch documentation
+		this.reconnectTimer = null;
+		this.isShuttingDown = false;
 	}
 
 	async start() {
@@ -50,6 +52,10 @@ class TwitchBot {
 		if (this.keepaliveTimer) {
 			clearTimeout(this.keepaliveTimer);
 			this.keepaliveTimer = null;
+		}
+		if (this.reconnectTimer) {
+			clearTimeout(this.reconnectTimer);
+			this.reconnectTimer = null;
 		}
 
 		if (this.ws) {
@@ -72,13 +78,13 @@ class TwitchBot {
 		this.ws.on("message", (data) => this.onMessage(data, oldWs));
 		this.ws.on("close", (code, reason) => {
 			console.log(
-				`WebSocket closed: ${code} - ${reason}. Reconnecting in 5s...`,
+				`WebSocket closed: ${code} - ${reason}.`,
 			);
 			if (this.keepaliveTimer) {
 				clearTimeout(this.keepaliveTimer);
 				this.keepaliveTimer = null;
 			}
-			setTimeout(() => this.connect(), 5000);
+			this.scheduleReconnect(5000);
 		});
 		this.ws.on("error", (err) => {
 			console.error("WebSocket error:", err);
@@ -144,9 +150,24 @@ class TwitchBot {
 		this.keepaliveTimer = setTimeout(() => {
 			console.warn(`Keepalive timeout reached. No message received for ${this.keepaliveTimeoutSeconds + 3} seconds. Reconnecting...`);
 			if (this.ws) {
-				this.ws.terminate();
+				try {
+					this.ws.terminate();
+				} catch (e) {
+					console.error("Error terminating WebSocket:", e);
+				}
 			}
+			this.scheduleReconnect(5000);
 		}, timeoutMs);
+	}
+
+	scheduleReconnect(delayMs = 5000) {
+		if (this.reconnectTimer) {
+			clearTimeout(this.reconnectTimer);
+		}
+		console.log(`Scheduling reconnect in ${delayMs / 1000}s...`);
+		this.reconnectTimer = setTimeout(() => {
+			this.connect();
+		}, delayMs);
 	}
 
 	async handleNotification(payload) {
@@ -449,8 +470,13 @@ class TwitchBot {
 			console.warn("One or more subscriptions failed. Force-reconnecting WebSocket in 10s to retry...");
 			setTimeout(() => {
 				if (this.ws) {
-					this.ws.terminate();
+					try {
+						this.ws.terminate();
+					} catch (e) {
+						console.error("Error terminating WebSocket during subscription retry:", e);
+					}
 				}
+				this.scheduleReconnect(5000);
 			}, 10000);
 		}
 	}
@@ -472,3 +498,67 @@ class TwitchBot {
 
 const bot = new TwitchBot();
 bot.start();
+
+// Handle process termination signals to allow clean shutdown
+const shutdown = async (signal) => {
+	console.log(`Received ${signal}. Shutting down gracefully...`);
+	bot.isShuttingDown = true;
+	if (bot.keepaliveTimer) clearTimeout(bot.keepaliveTimer);
+	if (bot.reconnectTimer) clearTimeout(bot.reconnectTimer);
+	await bot.stopChatLogger();
+	if (bot.ws) {
+		bot.ws.removeAllListeners();
+		bot.ws.close();
+	}
+	process.exit(0);
+};
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+// Process termination monitoring and notification
+process.on("beforeExit", async (code) => {
+	if (bot.isShuttingDown) return;
+	console.warn(`Process is about to exit with code: ${code} (Event loop empty)`);
+	try {
+		await sendNotification({
+			title: "Twitch Bot Warning",
+			message: `Process is exiting unexpectedly (code: ${code}). Attempting to reconnect...`,
+			priority: "high",
+			tags: ["warning", "retry"],
+		});
+	} catch (e) {
+		console.error("Failed to send exit notification:", e);
+	}
+	bot.connect();
+});
+
+process.on("uncaughtException", async (err) => {
+	console.error("Uncaught Exception:", err);
+	try {
+		await sendNotification({
+			title: "Twitch Bot Crashed",
+			message: `Uncaught Exception: ${err.message}\n${err.stack}`,
+			priority: "high",
+			tags: ["x", "fire"],
+		});
+	} catch (e) {
+		console.error("Failed to send crash notification:", e);
+	}
+	process.exit(1);
+});
+
+process.on("unhandledRejection", async (reason, promise) => {
+	console.error("Unhandled Rejection at:", promise, "reason:", reason);
+	try {
+		await sendNotification({
+			title: "Twitch Bot Crashed",
+			message: `Unhandled Rejection: ${reason}`,
+			priority: "high",
+			tags: ["x", "fire"],
+		});
+	} catch (e) {
+		console.error("Failed to send crash notification:", e);
+	}
+	process.exit(1);
+});
